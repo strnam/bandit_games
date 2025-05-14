@@ -152,6 +152,27 @@ def greedy_choice(arm_counts):
     
     return choice
 
+def epsilon_greedy_choice(arm_counts):
+    """
+    Epsilon-Greedy algorithm for arm selection.
+    
+    Args:
+        arm_counts: n_arms x 2 array of observed counts [successes, failures]
+        
+    Returns:
+        choice: int - arm to be pulled at the next timestep (0 index)
+    """
+    epsilon = 0.1  # Probability of random action
+    
+    if np.random.random() < epsilon:
+        # Explore: choose a random arm
+        choice = np.random.randint(0, len(arm_counts))
+    else:
+        # Exploit: choose the best arm according to greedy policy
+        choice = greedy_choice(arm_counts)
+        
+    return choice
+
 # Game Session
 class GameSession:
     def __init__(self, num_persons, medicines, person_probabilities=None):
@@ -159,30 +180,28 @@ class GameSession:
         self.medicines = medicines
         self.persons = []
         self.results = {"survived": 0, "died": 0}
+        self.baseline_results = {"survived": 0, "died": 0}
+        self.baseline2_results = {"survived": 0, "died": 0}  # For epsilon-greedy
+        self.game_over = False
+        self.arm_counts = [[0, 0] for _ in range(len(medicines))]
+        self.arm_counts_epsilon = [[0, 0] for _ in range(len(medicines))]  # Separate counts for epsilon-greedy
+        self.accumulated_survival = [0]  # Track accumulated survival
+        self.baseline_accumulated_survival = [0]  # Track baseline accumulated survival
+        self.baseline2_accumulated_survival = [0]  # Track epsilon-greedy accumulated survival
         self.current_person_index = 0
         self.person_probabilities = person_probabilities or {
             "male_young": 0.25, "male_old": 0.25, 
             "female_young": 0.25, "female_old": 0.25
         }
         self.generate_persons()
-        self.game_over = False
         self.selected_medicine = None
         self.current_result = None
         # Add history tracking for each person
         self.history = []  # Will contain True for survived, False for died
         
-        # Track accumulated survival numbers for graphing
-        self.accumulated_survival = []  # List of cumulative survival counts
-        
-        # Initialize arm counts for greedy algorithm
-        # For each medicine, track [successes, failures] for each person type
-        self.arm_counts = {}
-        for gender in Gender:
-            for age in Age:
-                self.arm_counts[(gender, age)] = [[0, 0] for _ in range(len(medicines))]
-        
         # Run baseline simulation in the background
         self.baseline_results, self.baseline_accumulated_survival = self.run_baseline_simulation()
+        self.baseline2_results, self.baseline2_accumulated_survival = self.run_baseline2_simulation()
     
     def generate_persons(self):
         # Generate persons based on configured probabilities
@@ -243,12 +262,16 @@ class GameSession:
             self.history.append(survived)
             
             # Update arm counts for the greedy algorithm
-            person_type = (person.gender, person.age)
-            if person_type in self.arm_counts:
-                if survived:
-                    self.arm_counts[person_type][medicine_index][0] += 1  # Success
-                else:
-                    self.arm_counts[person_type][medicine_index][1] += 1  # Failure
+            if survived:
+                self.arm_counts[medicine_index][0] += 1  # Success
+            else:
+                self.arm_counts[medicine_index][1] += 1  # Failure
+            
+            # Update arm counts for the epsilon-greedy algorithm
+            if survived:
+                self.arm_counts_epsilon[medicine_index][0] += 1  # Success
+            else:
+                self.arm_counts_epsilon[medicine_index][1] += 1  # Failure
             
             if survived:
                 self.results["survived"] += 1
@@ -269,29 +292,30 @@ class GameSession:
         return False
         
     def generate_survival_graph(self):
-        """Generate a graph comparing user and baseline accumulated survival"""
-        # Create x-axis (person numbers)
-        x = list(range(1, self.num_persons + 1))
-        
-        # Create the plot
+        """Generate a graph comparing user performance with baseline algorithms"""
         plt.figure(figsize=(10, 6))
-        plt.plot(x, self.accumulated_survival, 'b-', label='Your Performance', linewidth=2)
-        plt.plot(x, self.baseline_accumulated_survival, 'r--', label='Baseline Algorithm', linewidth=2)
+        x = range(len(self.accumulated_survival))
         
-        # Add labels and title
+        # Plot user performance
+        plt.plot(x, self.accumulated_survival, 'b-', linewidth=2, label='Your Performance')
+        
+        # Plot baseline 1 performance (greedy)
+        plt.plot(x, self.baseline_accumulated_survival, 'r--', linewidth=2, label='Greedy Algorithm')
+        
+        # Plot baseline 2 performance (epsilon-greedy)
+        plt.plot(x, self.baseline2_accumulated_survival, 'g-.', linewidth=2, label='Epsilon-Greedy Algorithm')
+        
         plt.xlabel('Person Number')
         plt.ylabel('Accumulated Survival Count')
-        plt.title('Your Performance vs. Baseline Algorithm')
-        plt.grid(True, linestyle='--', alpha=0.7)
+        plt.title('Performance Comparison: You vs. Baseline Algorithms')
         plt.legend()
+        plt.grid(True)
         
-        # Save the figure
-        graph_path = os.path.join(os.path.dirname(__file__), 'survival_comparison.png')
-        plt.savefig(graph_path)
+        # Save the graph
+        plt.savefig('survival_comparison.png', dpi=100, bbox_inches='tight')
         plt.close()
         
-        return graph_path
-        
+        return 'survival_comparison.png'
     def get_greedy_recommendation(self, person, arm_counts):
         """Get medicine recommendation using the greedy algorithm for a specific person"""
         person_type = (person.gender, person.age)
@@ -308,30 +332,65 @@ class GameSession:
         
         # Initialize results and arm counts for simulation
         sim_results = {"survived": 0, "died": 0}
-        sim_arm_counts = {}
-        for gender in Gender:
-            for age in Age:
-                sim_arm_counts[(gender, age)] = [[0, 0] for _ in range(len(self.medicines))]
+        sim_arm_counts = [[0, 0] for _ in range(len(self.medicines))]
         
         # Track accumulated survival for baseline
-        accumulated_survival = []
+        accumulated_survival = [0]
         
         # Run simulation for each person
         for person in sim_persons:
             # Get recommendation from greedy algorithm
-            medicine_index = self.get_greedy_recommendation(person, sim_arm_counts)
+            medicine_index = greedy_choice(sim_arm_counts)
             medicine = self.medicines[medicine_index]
             
             # Apply medicine and get result
-            survived = medicine.apply(person)
+            effectiveness = medicine.get_effective_rate(person)
+            survived = np.random.random() < effectiveness
             
             # Update arm counts
-            person_type = (person.gender, person.age)
-            if person_type in sim_arm_counts:
-                if survived:
-                    sim_arm_counts[person_type][medicine_index][0] += 1  # Success
-                else:
-                    sim_arm_counts[person_type][medicine_index][1] += 1  # Failure
+            if survived:
+                sim_arm_counts[medicine_index][0] += 1  # Success
+            else:
+                sim_arm_counts[medicine_index][1] += 1  # Failure
+            
+            # Update results
+            if survived:
+                sim_results["survived"] += 1
+            else:
+                sim_results["died"] += 1
+                
+            # Update accumulated survival
+            accumulated_survival.append(sim_results["survived"])
+        
+        return sim_results, accumulated_survival
+        
+    def run_baseline2_simulation(self):
+        """Run a simulation using the epsilon-greedy algorithm as a second baseline"""
+        # Create a copy of the persons list for simulation
+        sim_persons = self.persons.copy()
+        
+        # Initialize results and arm counts for simulation
+        sim_results = {"survived": 0, "died": 0}
+        sim_arm_counts = [[0, 0] for _ in range(len(self.medicines))]
+        
+        # Track accumulated survival for baseline
+        accumulated_survival = [0]
+        
+        # Run simulation for each person
+        for person in sim_persons:
+            # Get recommendation from epsilon-greedy algorithm
+            medicine_index = epsilon_greedy_choice(sim_arm_counts)
+            medicine = self.medicines[medicine_index]
+            
+            # Apply medicine and get result
+            effectiveness = medicine.get_effective_rate(person)
+            survived = np.random.random() < effectiveness
+            
+            # Update arm counts
+            if survived:
+                sim_arm_counts[medicine_index][0] += 1  # Success
+            else:
+                sim_arm_counts[medicine_index][1] += 1  # Failure
             
             # Update results
             if survived:
@@ -479,33 +538,61 @@ class GameUI:
         self.draw_text_on_surface(scroll_surface, f"Your Survival Rate: {user_survival_rate:.1f}%", self.font, BLUE, 
                       SCREEN_WIDTH // 2, 310, centered=True)
         
-        # Draw baseline results
+        # Draw greedy baseline results
         self.draw_text_on_surface(scroll_surface, "Greedy Algorithm Baseline:", self.font, BLACK, SCREEN_WIDTH // 2, 360, centered=True)
         self.draw_text_on_surface(scroll_surface, f"Survived: {self.session.baseline_results['survived']}", self.font, GREEN, 
                       SCREEN_WIDTH // 2, 390, centered=True)
         self.draw_text_on_surface(scroll_surface, f"Died: {self.session.baseline_results['died']}", self.font, RED, 
                       SCREEN_WIDTH // 2, 420, centered=True)
         
-        # Draw baseline survival rate
+        # Draw greedy baseline survival rate
         baseline_survival_rate = (self.session.baseline_results['survived'] / self.session.num_persons) * 100
-        self.draw_text_on_surface(scroll_surface, f"Baseline Survival Rate: {baseline_survival_rate:.1f}%", self.font, BLUE, 
+        self.draw_text_on_surface(scroll_surface, f"Greedy Survival Rate: {baseline_survival_rate:.1f}%", self.font, BLUE, 
                       SCREEN_WIDTH // 2, 450, centered=True)
         
-        # Draw comparison
-        diff = user_survival_rate - baseline_survival_rate
-        comparison_text = ""
-        comparison_color = BLACK
-        if abs(diff) < 0.01:  # Almost equal
-            comparison_text = "Your performance equals the baseline"
-            comparison_color = BLUE
-        elif diff > 0:
-            comparison_text = f"You outperformed the baseline by {abs(diff):.1f}%"
-            comparison_color = GREEN
+        # Draw epsilon-greedy baseline results
+        self.draw_text_on_surface(scroll_surface, "Epsilon-Greedy Algorithm Baseline:", self.font, BLACK, SCREEN_WIDTH // 2, 500, centered=True)
+        self.draw_text_on_surface(scroll_surface, f"Survived: {self.session.baseline2_results['survived']}", self.font, GREEN, 
+                      SCREEN_WIDTH // 2, 530, centered=True)
+        self.draw_text_on_surface(scroll_surface, f"Died: {self.session.baseline2_results['died']}", self.font, RED, 
+                      SCREEN_WIDTH // 2, 560, centered=True)
+        
+        # Draw epsilon-greedy baseline survival rate
+        baseline2_survival_rate = (self.session.baseline2_results['survived'] / self.session.num_persons) * 100
+        self.draw_text_on_surface(scroll_surface, f"Epsilon-Greedy Survival Rate: {baseline2_survival_rate:.1f}%", self.font, BLUE, 
+                      SCREEN_WIDTH // 2, 590, centered=True)
+        
+        # Draw comparison with greedy
+        diff_greedy = user_survival_rate - baseline_survival_rate
+        comparison_text_greedy = ""
+        comparison_color_greedy = BLACK
+        if abs(diff_greedy) < 0.01:  # Almost equal
+            comparison_text_greedy = "Your performance equals the Greedy baseline"
+            comparison_color_greedy = BLUE
+        elif diff_greedy > 0:
+            comparison_text_greedy = f"You outperformed Greedy by {abs(diff_greedy):.1f}%"
+            comparison_color_greedy = GREEN
         else:
-            comparison_text = f"Baseline outperformed you by {abs(diff):.1f}%"
-            comparison_color = RED
+            comparison_text_greedy = f"Greedy outperformed you by {abs(diff_greedy):.1f}%"
+            comparison_color_greedy = RED
             
-        self.draw_text_on_surface(scroll_surface, comparison_text, self.font, comparison_color, SCREEN_WIDTH // 2, 500, centered=True)
+        self.draw_text_on_surface(scroll_surface, comparison_text_greedy, self.font, comparison_color_greedy, SCREEN_WIDTH // 2, 640, centered=True)
+        
+        # Draw comparison with epsilon-greedy
+        diff_egreedy = user_survival_rate - baseline2_survival_rate
+        comparison_text_egreedy = ""
+        comparison_color_egreedy = BLACK
+        if abs(diff_egreedy) < 0.01:  # Almost equal
+            comparison_text_egreedy = "Your performance equals the Epsilon-Greedy baseline"
+            comparison_color_egreedy = BLUE
+        elif diff_egreedy > 0:
+            comparison_text_egreedy = f"You outperformed Epsilon-Greedy by {abs(diff_egreedy):.1f}%"
+            comparison_color_egreedy = GREEN
+        else:
+            comparison_text_egreedy = f"Epsilon-Greedy outperformed you by {abs(diff_egreedy):.1f}%"
+            comparison_color_egreedy = RED
+            
+        self.draw_text_on_surface(scroll_surface, comparison_text_egreedy, self.font, comparison_color_egreedy, SCREEN_WIDTH // 2, 670, centered=True)
         
         # Load and display the survival comparison graph
         graph_path = os.path.join(os.path.dirname(__file__), 'survival_comparison.png')
