@@ -8,6 +8,7 @@ import matplotlib
 matplotlib.use('Agg')  # Use the Agg backend (non-GUI)
 import matplotlib.pyplot as plt
 from enum import Enum
+from scipy import stats  # For beta distribution
 
 # Initialize pygame
 pygame.init()
@@ -173,35 +174,66 @@ def epsilon_greedy_choice(arm_counts):
         
     return choice
 
+def posterior_sampling_choice(arm_counts):
+    """
+    Posterior Sampling (Thompson Sampling) algorithm for arm selection.
+    
+    Args:
+        arm_counts: n_arms x 2 array of observed counts [successes, failures]
+        
+    Returns:
+        choice: int - arm to be pulled at the next timestep (0 index)
+    """
+    p_max = -1
+    choice = -1
+    prior_a = 1  # Alpha parameter for Beta prior
+    prior_b = 1  # Beta parameter for Beta prior
+    
+    for i in range(len(arm_counts)):
+        # Sample from Beta distribution with updated parameters
+        p_sample = stats.beta.rvs(arm_counts[i][0] + prior_a, arm_counts[i][1] + prior_b)
+        
+        if p_sample > p_max:
+            p_max = p_sample
+            choice = i
+            
+    return choice
+
 # Game Session
 class GameSession:
-    def __init__(self, num_persons, medicines, person_probabilities=None):
+    def __init__(self, num_persons, medicines, person_probabilities=None, ask_continue=True):
         self.num_persons = num_persons
         self.medicines = medicines
         self.persons = []
         self.results = {"survived": 0, "died": 0}
-        self.baseline_results = {"survived": 0, "died": 0}
+        self.baseline_results = {"survived": 0, "died": 0}  # For greedy
         self.baseline2_results = {"survived": 0, "died": 0}  # For epsilon-greedy
+        self.baseline3_results = {"survived": 0, "died": 0}  # For posterior sampling
         self.game_over = False
         self.arm_counts = [[0, 0] for _ in range(len(medicines))]
         self.arm_counts_epsilon = [[0, 0] for _ in range(len(medicines))]  # Separate counts for epsilon-greedy
+        self.arm_counts_posterior = [[0, 0] for _ in range(len(medicines))]  # Separate counts for posterior sampling
         self.accumulated_survival = [0]  # Track accumulated survival
-        self.baseline_accumulated_survival = [0]  # Track baseline accumulated survival
+        self.baseline_accumulated_survival = [0]  # Track greedy accumulated survival
         self.baseline2_accumulated_survival = [0]  # Track epsilon-greedy accumulated survival
+        self.baseline3_accumulated_survival = [0]  # Track posterior sampling accumulated survival
         self.current_person_index = 0
         self.person_probabilities = person_probabilities or {
             "male_young": 0.25, "male_old": 0.25, 
             "female_young": 0.25, "female_old": 0.25
         }
+        self.ask_continue = ask_continue  # Whether to ask for confirmation after each medicine application
         self.generate_persons()
         self.selected_medicine = None
         self.current_result = None
+        self.result_display_time = 0  # Timer for displaying result when ask_continue is False
         # Add history tracking for each person
         self.history = []  # Will contain True for survived, False for died
         
-        # Run baseline simulation in the background
+        # Run baseline simulations in the background
         self.baseline_results, self.baseline_accumulated_survival = self.run_baseline_simulation()
         self.baseline2_results, self.baseline2_accumulated_survival = self.run_baseline2_simulation()
+        self.baseline3_results, self.baseline3_accumulated_survival = self.run_baseline3_simulation()
     
     def generate_persons(self):
         # Generate persons based on configured probabilities
@@ -305,6 +337,9 @@ class GameSession:
         # Plot baseline 2 performance (epsilon-greedy)
         plt.plot(x, self.baseline2_accumulated_survival, 'g-.', linewidth=2, label='Epsilon-Greedy Algorithm')
         
+        # Plot baseline 3 performance (posterior sampling)
+        plt.plot(x, self.baseline3_accumulated_survival, 'm:', linewidth=2, label='Posterior Sampling Algorithm')
+        
         plt.xlabel('Person Number')
         plt.ylabel('Accumulated Survival Count')
         plt.title('Performance Comparison: You vs. Baseline Algorithms')
@@ -380,6 +415,45 @@ class GameSession:
         for person in sim_persons:
             # Get recommendation from epsilon-greedy algorithm
             medicine_index = epsilon_greedy_choice(sim_arm_counts)
+            medicine = self.medicines[medicine_index]
+            
+            # Apply medicine and get result
+            effectiveness = medicine.get_effective_rate(person)
+            survived = np.random.random() < effectiveness
+            
+            # Update arm counts
+            if survived:
+                sim_arm_counts[medicine_index][0] += 1  # Success
+            else:
+                sim_arm_counts[medicine_index][1] += 1  # Failure
+            
+            # Update results
+            if survived:
+                sim_results["survived"] += 1
+            else:
+                sim_results["died"] += 1
+                
+            # Update accumulated survival
+            accumulated_survival.append(sim_results["survived"])
+        
+        return sim_results, accumulated_survival
+        
+    def run_baseline3_simulation(self):
+        """Run a simulation using the posterior sampling algorithm as a third baseline"""
+        # Create a copy of the persons list for simulation
+        sim_persons = self.persons.copy()
+        
+        # Initialize results and arm counts for simulation
+        sim_results = {"survived": 0, "died": 0}
+        sim_arm_counts = [[0, 0] for _ in range(len(self.medicines))]
+        
+        # Track accumulated survival for baseline
+        accumulated_survival = [0]
+        
+        # Run simulation for each person
+        for person in sim_persons:
+            # Get recommendation from posterior sampling algorithm
+            medicine_index = posterior_sampling_choice(sim_arm_counts)
             medicine = self.medicines[medicine_index]
             
             # Apply medicine and get result
@@ -516,7 +590,7 @@ class GameUI:
     def draw_game_over_screen(self):
         # Create a scrollable surface that can be larger than the screen
         # First, determine the total height needed
-        total_height = 1500  # Start with a large value to accommodate all content
+        total_height = 1800  # Increased to accommodate the third baseline
         
         # Create a surface for the scrollable content
         scroll_surface = pygame.Surface((SCREEN_WIDTH, total_height))
@@ -562,6 +636,18 @@ class GameUI:
         self.draw_text_on_surface(scroll_surface, f"Epsilon-Greedy Survival Rate: {baseline2_survival_rate:.1f}%", self.font, BLUE, 
                       SCREEN_WIDTH // 2, 590, centered=True)
         
+        # Draw posterior sampling baseline results
+        self.draw_text_on_surface(scroll_surface, "Posterior Sampling Algorithm Baseline:", self.font, BLACK, SCREEN_WIDTH // 2, 640, centered=True)
+        self.draw_text_on_surface(scroll_surface, f"Survived: {self.session.baseline3_results['survived']}", self.font, GREEN, 
+                      SCREEN_WIDTH // 2, 670, centered=True)
+        self.draw_text_on_surface(scroll_surface, f"Died: {self.session.baseline3_results['died']}", self.font, RED, 
+                      SCREEN_WIDTH // 2, 700, centered=True)
+        
+        # Draw posterior sampling baseline survival rate
+        baseline3_survival_rate = (self.session.baseline3_results['survived'] / self.session.num_persons) * 100
+        self.draw_text_on_surface(scroll_surface, f"Posterior Sampling Survival Rate: {baseline3_survival_rate:.1f}%", self.font, BLUE, 
+                      SCREEN_WIDTH // 2, 730, centered=True)
+        
         # Draw comparison with greedy
         diff_greedy = user_survival_rate - baseline_survival_rate
         comparison_text_greedy = ""
@@ -576,7 +662,7 @@ class GameUI:
             comparison_text_greedy = f"Greedy outperformed you by {abs(diff_greedy):.1f}%"
             comparison_color_greedy = RED
             
-        self.draw_text_on_surface(scroll_surface, comparison_text_greedy, self.font, comparison_color_greedy, SCREEN_WIDTH // 2, 640, centered=True)
+        self.draw_text_on_surface(scroll_surface, comparison_text_greedy, self.font, comparison_color_greedy, SCREEN_WIDTH // 2, 780, centered=True)
         
         # Draw comparison with epsilon-greedy
         diff_egreedy = user_survival_rate - baseline2_survival_rate
@@ -592,11 +678,27 @@ class GameUI:
             comparison_text_egreedy = f"Epsilon-Greedy outperformed you by {abs(diff_egreedy):.1f}%"
             comparison_color_egreedy = RED
             
-        self.draw_text_on_surface(scroll_surface, comparison_text_egreedy, self.font, comparison_color_egreedy, SCREEN_WIDTH // 2, 670, centered=True)
+        self.draw_text_on_surface(scroll_surface, comparison_text_egreedy, self.font, comparison_color_egreedy, SCREEN_WIDTH // 2, 810, centered=True)
+        
+        # Draw comparison with posterior sampling
+        diff_posterior = user_survival_rate - baseline3_survival_rate
+        comparison_text_posterior = ""
+        comparison_color_posterior = BLACK
+        if abs(diff_posterior) < 0.01:  # Almost equal
+            comparison_text_posterior = "Your performance equals the Posterior Sampling baseline"
+            comparison_color_posterior = BLUE
+        elif diff_posterior > 0:
+            comparison_text_posterior = f"You outperformed Posterior Sampling by {abs(diff_posterior):.1f}%"
+            comparison_color_posterior = GREEN
+        else:
+            comparison_text_posterior = f"Posterior Sampling outperformed you by {abs(diff_posterior):.1f}%"
+            comparison_color_posterior = RED
+            
+        self.draw_text_on_surface(scroll_surface, comparison_text_posterior, self.font, comparison_color_posterior, SCREEN_WIDTH // 2, 840, centered=True)
         
         # Load and display the survival comparison graph
         graph_path = os.path.join(os.path.dirname(__file__), 'survival_comparison.png')
-        graph_y = 550
+        graph_y = 900  # Moved down to accommodate the third baseline
         if os.path.exists(graph_path):
             try:
                 graph_image = pygame.image.load(graph_path)
@@ -804,20 +906,32 @@ def main():
     # Get number of persons from config
     num_persons = config['game']['num_persons']
     
-    # Get person probabilities from config
+    # Create a new game session with config values
+    num_persons = config['game']['num_persons']
+    ask_continue = config['game'].get('ask_continue', True)  # Default to True if not specified
     person_probabilities = config.get('person_probabilities', {
         "male_young": 0.25, "male_old": 0.25, 
         "female_young": 0.25, "female_old": 0.25
     })
-    
-    # Create game session
-    session = GameSession(num_persons, medicines, person_probabilities)
+    session = GameSession(num_persons, medicines, person_probabilities, ask_continue)
     ui = GameUI(screen, session)
     
     # Main game loop
     running = True
+    result_display_duration = 1000  # 1 second to display result when ask_continue is False
     while running:
         mouse_pos = pygame.mouse.get_pos()
+        current_time = pygame.time.get_ticks()
+        
+        # Auto-continue if ask_continue is False and we're showing a result
+        if not session.ask_continue and session.current_result is not None:
+            if session.result_display_time == 0:  # First time seeing this result
+                session.result_display_time = current_time
+            elif current_time - session.result_display_time > result_display_duration:
+                # Move to next person after displaying result for a short time
+                session.current_result = None
+                session.selected_medicine = None
+                session.result_display_time = 0
         
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
@@ -827,11 +941,12 @@ def main():
                 if action == "restart":
                     # Create a new game session with config values
                     num_persons = config['game']['num_persons']
+                    ask_continue = config['game'].get('ask_continue', True)
                     person_probabilities = config.get('person_probabilities', {
                         "male_young": 0.25, "male_old": 0.25, 
                         "female_young": 0.25, "female_old": 0.25
                     })
-                    session = GameSession(num_persons, medicines, person_probabilities)
+                    session = GameSession(num_persons, medicines, person_probabilities, ask_continue)
                     ui.session = session
                     # Reset scroll position
                     ui.scroll_y = 0

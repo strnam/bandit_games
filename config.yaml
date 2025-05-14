@@ -3,6 +3,7 @@
 # Game settings
 game:
   num_persons: 10  # Number of persons in a game session
+  ask_continue: false  # Whether to ask for confirmation after each medicine application
 
 # Person type probabilities
 person_probabilities:
