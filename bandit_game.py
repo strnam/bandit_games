@@ -1,23 +1,23 @@
 import pygame
 import sys
-import random
 import os
 import yaml
+import numpy as np
 from enum import Enum
 
 # Initialize pygame
 pygame.init()
 
 # Constants
-SCREEN_WIDTH = 800
-SCREEN_HEIGHT = 600
+SCREEN_WIDTH = 1280
+SCREEN_HEIGHT = 900
 WHITE = (255, 255, 255)
 BLACK = (0, 0, 0)
 GRAY = (200, 200, 200)
 BLUE = (0, 0, 255)
 GREEN = (0, 255, 0)
 RED = (255, 0, 0)
-FONT_SIZE = 24
+FONT_SIZE = 28
 
 # Gender Enum
 class Gender(Enum):
@@ -46,8 +46,8 @@ class Person:
         try:
             if os.path.exists(image_path):
                 self.image = pygame.image.load(image_path)
-                # Scale the image to a reasonable size
-                self.image = pygame.transform.scale(self.image, (150, 150))
+                # Scale the image to a larger size
+                self.image = pygame.transform.scale(self.image, (200, 200))
             else:
                 # Create a placeholder image with text
                 self.image = self.create_placeholder_image()
@@ -56,7 +56,7 @@ class Person:
     
     def create_placeholder_image(self):
         # Create a surface for the placeholder
-        surface = pygame.Surface((150, 150))
+        surface = pygame.Surface((200, 200))
         
         # Choose background color based on gender
         if self.gender == Gender.MALE:
@@ -117,10 +117,36 @@ class Medicine:
     def apply(self, person):
         effective_rate = self.get_effective_rate(person)
         # Bernoulli distribution: 1 (survive) with probability effective_rate, 0 (die) otherwise
-        return random.random() < effective_rate
+        return np.random.random() < effective_rate
     
     def __str__(self):
         return self.name
+
+# Greedy Algorithm for medicine selection
+def greedy_choice(arm_counts):
+    """
+    Greedy choice uses the empirical estimate to choose an arm.
+    
+    Args:
+        arm_counts - n_arms x 2 - array of observed counts [successes, failures]
+    
+    Returns:
+        choice - int - arm to be pulled at the next timestep (0 index)
+    """
+    p_max = -1
+    choice = -1
+    for i in range(len(arm_counts)):
+        n_pull = arm_counts[i][0] + arm_counts[i][1]
+        if n_pull < 0.5:  # No pulls yet
+            p_hat = 0.5    # Default probability
+        else:
+            p_hat = arm_counts[i][0] / n_pull  # Success rate
+        
+        if p_hat > p_max:
+            p_max = p_hat
+            choice = i
+    
+    return choice
 
 # Game Session
 class GameSession:
@@ -140,6 +166,16 @@ class GameSession:
         self.current_result = None
         # Add history tracking for each person
         self.history = []  # Will contain True for survived, False for died
+        
+        # Initialize arm counts for greedy algorithm
+        # For each medicine, track [successes, failures] for each person type
+        self.arm_counts = {}
+        for gender in Gender:
+            for age in Age:
+                self.arm_counts[(gender, age)] = [[0, 0] for _ in range(len(medicines))]
+        
+        # Run baseline simulation in the background
+        self.baseline_results = self.run_baseline_simulation()
     
     def generate_persons(self):
         # Generate persons based on configured probabilities
@@ -175,8 +211,12 @@ class GameSession:
                 ]
                 weights = [0.25, 0.25, 0.25, 0.25]
             
-            # Choose a person type based on weights
-            gender, age = random.choices(choices, weights=weights, k=1)[0]
+            # Normalize weights to sum to 1
+            weights = np.array(weights) / np.sum(weights)
+            
+            # Choose a person type based on weights using NumPy
+            idx = np.random.choice(len(choices), p=weights)
+            gender, age = choices[idx]
             self.persons.append(Person(gender, age))
     
     def get_current_person(self):
@@ -195,6 +235,14 @@ class GameSession:
             # Add to history
             self.history.append(survived)
             
+            # Update arm counts for the greedy algorithm
+            person_type = (person.gender, person.age)
+            if person_type in self.arm_counts:
+                if survived:
+                    self.arm_counts[person_type][medicine_index][0] += 1  # Success
+                else:
+                    self.arm_counts[person_type][medicine_index][1] += 1  # Failure
+            
             if survived:
                 self.results["survived"] += 1
             else:
@@ -207,6 +255,52 @@ class GameSession:
             
             return survived
         return False
+        
+    def get_greedy_recommendation(self, person, arm_counts):
+        """Get medicine recommendation using the greedy algorithm for a specific person"""
+        person_type = (person.gender, person.age)
+        if person_type in arm_counts:
+            return greedy_choice(arm_counts[person_type])
+        
+        # Default to first medicine if no recommendation
+        return 0
+        
+    def run_baseline_simulation(self):
+        """Run a simulation using the greedy algorithm as a baseline"""
+        # Create a copy of the persons list for simulation
+        sim_persons = self.persons.copy()
+        
+        # Initialize results and arm counts for simulation
+        sim_results = {"survived": 0, "died": 0}
+        sim_arm_counts = {}
+        for gender in Gender:
+            for age in Age:
+                sim_arm_counts[(gender, age)] = [[0, 0] for _ in range(len(self.medicines))]
+        
+        # Run simulation for each person
+        for person in sim_persons:
+            # Get recommendation from greedy algorithm
+            medicine_index = self.get_greedy_recommendation(person, sim_arm_counts)
+            medicine = self.medicines[medicine_index]
+            
+            # Apply medicine and get result
+            survived = medicine.apply(person)
+            
+            # Update arm counts
+            person_type = (person.gender, person.age)
+            if person_type in sim_arm_counts:
+                if survived:
+                    sim_arm_counts[person_type][medicine_index][0] += 1  # Success
+                else:
+                    sim_arm_counts[person_type][medicine_index][1] += 1  # Failure
+            
+            # Update results
+            if survived:
+                sim_results["survived"] += 1
+            else:
+                sim_results["died"] += 1
+        
+        return sim_results
 
 # Game UI
 class GameUI:
@@ -217,10 +311,10 @@ class GameUI:
         self.title_font = pygame.font.SysFont(None, FONT_SIZE * 2)
         self.button_rects = []
         # History matrix settings
-        self.history_cell_size = 30
-        self.history_margin = 20
-        self.history_start_x = SCREEN_WIDTH - 200  # Position on the right side
-        self.history_start_y = 400  # Position below the person image
+        self.history_cell_size = 60  # Even larger cells
+        self.history_margin = 15     # Margin between cells
+        self.history_start_x = SCREEN_WIDTH - 450  # Position on the right side
+        self.history_start_y = 400   # Position below the person image
     
     def draw_text(self, text, font, color, x, y, centered=False):
         text_surface = font.render(text, True, color)
@@ -266,23 +360,23 @@ class GameUI:
         
         # Draw person info
         self.draw_text(f"Person {self.session.current_person_index + 1} of {self.session.num_persons}:", 
-                      self.font, BLACK, 50, 120)
-        self.draw_text(f"Gender: {person.gender.value}", self.font, BLACK, 50, 150)
-        self.draw_text(f"Age: {person.age.value}", self.font, BLACK, 50, 180)
+                      self.font, BLACK, 80, 140)
+        self.draw_text(f"Gender: {person.gender.value}", self.font, BLACK, 80, 180)
+        self.draw_text(f"Age: {person.age.value}", self.font, BLACK, 80, 220)
         
         # Draw person image
         if person.image:
-            image_rect = person.image.get_rect(center=(SCREEN_WIDTH - 150, 150))
+            image_rect = person.image.get_rect(center=(SCREEN_WIDTH - 250, 180))
             self.screen.blit(person.image, image_rect)
         
         # Draw instructions
-        self.draw_text("Select a medicine to administer:", self.font, BLACK, 50, 230)
+        self.draw_text("Select a medicine to administer:", self.font, BLACK, 80, 280)
         
         # Draw medicine buttons
         for i, medicine in enumerate(self.session.medicines):
-            y_pos = 280 + i * 60
-            hover = pygame.Rect(200, y_pos, 400, 50).collidepoint(mouse_pos)
-            button_rect = self.draw_button(f"{medicine.name}", 200, y_pos, 400, 50, 
+            y_pos = 340 + i * 80
+            hover = pygame.Rect(200, y_pos, 550, 60).collidepoint(mouse_pos)
+            button_rect = self.draw_button(f"{medicine.name}", 200, y_pos, 550, 60, 
                                           GRAY if not hover else (220, 220, 220))
             self.button_rects.append(button_rect)
     
@@ -291,25 +385,25 @@ class GameUI:
         
         # Draw person info
         self.draw_text(f"Person {self.session.current_person_index} of {self.session.num_persons}:", 
-                      self.font, BLACK, 50, 120)
-        self.draw_text(f"Gender: {person.gender.value}", self.font, BLACK, 50, 150)
-        self.draw_text(f"Age: {person.age.value}", self.font, BLACK, 50, 180)
+                      self.font, BLACK, 80, 140)
+        self.draw_text(f"Gender: {person.gender.value}", self.font, BLACK, 80, 180)
+        self.draw_text(f"Age: {person.age.value}", self.font, BLACK, 80, 220)
         
         # Draw person image
         if person.image:
-            image_rect = person.image.get_rect(center=(SCREEN_WIDTH - 150, 150))
+            image_rect = person.image.get_rect(center=(SCREEN_WIDTH - 250, 180))
             self.screen.blit(person.image, image_rect)
         
         # Draw medicine info
-        self.draw_text(f"Medicine: {self.session.selected_medicine.name}", self.font, BLACK, 50, 230)
+        self.draw_text(f"Medicine: {self.session.selected_medicine.name}", self.font, BLACK, 80, 280)
         
         # Draw result
         result_color = GREEN if self.session.current_result == "Survived" else RED
-        self.draw_text(f"Result: {self.session.current_result}", self.font, result_color, 50, 260)
+        self.draw_text(f"Result: {self.session.current_result}", self.font, result_color, 80, 320)
         
         # Draw continue button
-        hover = pygame.Rect(300, 350, 200, 50).collidepoint(pygame.mouse.get_pos())
-        button_rect = self.draw_button("Continue", 300, 350, 200, 50, 
+        hover = pygame.Rect(350, 400, 250, 70).collidepoint(pygame.mouse.get_pos())
+        button_rect = self.draw_button("Continue", 350, 400, 250, 70, 
                                       GRAY if not hover else (220, 220, 220))
         self.button_rects = [button_rect]
     
@@ -317,31 +411,58 @@ class GameUI:
         # Draw title
         self.draw_text("Game Over", self.title_font, BLACK, SCREEN_WIDTH // 2, 150, centered=True)
         
-        # Draw results
-        self.draw_text(f"Total Persons: {self.session.num_persons}", self.font, BLACK, 
-                      SCREEN_WIDTH // 2, 220, centered=True)
+        # Draw user results
+        self.draw_text("Your Results:", self.font, BLACK, SCREEN_WIDTH // 2, 220, centered=True)
         self.draw_text(f"Survived: {self.session.results['survived']}", self.font, GREEN, 
                       SCREEN_WIDTH // 2, 250, centered=True)
         self.draw_text(f"Died: {self.session.results['died']}", self.font, RED, 
                       SCREEN_WIDTH // 2, 280, centered=True)
         
-        # Draw survival rate
-        survival_rate = (self.session.results['survived'] / self.session.num_persons) * 100
-        self.draw_text(f"Survival Rate: {survival_rate:.1f}%", self.font, BLUE, 
-                      SCREEN_WIDTH // 2, 320, centered=True)
+        # Draw user survival rate
+        user_survival_rate = (self.session.results['survived'] / self.session.num_persons) * 100
+        self.draw_text(f"Your Survival Rate: {user_survival_rate:.1f}%", self.font, BLUE, 
+                      SCREEN_WIDTH // 2, 310, centered=True)
+        
+        # Draw baseline results
+        self.draw_text("Greedy Algorithm Baseline:", self.font, BLACK, SCREEN_WIDTH // 2, 360, centered=True)
+        self.draw_text(f"Survived: {self.session.baseline_results['survived']}", self.font, GREEN, 
+                      SCREEN_WIDTH // 2, 390, centered=True)
+        self.draw_text(f"Died: {self.session.baseline_results['died']}", self.font, RED, 
+                      SCREEN_WIDTH // 2, 420, centered=True)
+        
+        # Draw baseline survival rate
+        baseline_survival_rate = (self.session.baseline_results['survived'] / self.session.num_persons) * 100
+        self.draw_text(f"Baseline Survival Rate: {baseline_survival_rate:.1f}%", self.font, BLUE, 
+                      SCREEN_WIDTH // 2, 450, centered=True)
+        
+        # Draw comparison
+        diff = user_survival_rate - baseline_survival_rate
+        comparison_text = ""
+        comparison_color = BLACK
+        if abs(diff) < 0.01:  # Almost equal
+            comparison_text = "Your performance equals the baseline"
+            comparison_color = BLUE
+        elif diff > 0:
+            comparison_text = f"You outperformed the baseline by {abs(diff):.1f}%"
+            comparison_color = GREEN
+        else:
+            comparison_text = f"Baseline outperformed you by {abs(diff):.1f}%"
+            comparison_color = RED
+            
+        self.draw_text(comparison_text, self.font, comparison_color, SCREEN_WIDTH // 2, 500, centered=True)
         
         # Draw restart button
-        hover = pygame.Rect(300, 400, 200, 50).collidepoint(pygame.mouse.get_pos())
-        button_rect = self.draw_button("Play Again", 300, 400, 200, 50, 
+        hover = pygame.Rect(SCREEN_WIDTH // 2 - 125, 570, 250, 70).collidepoint(pygame.mouse.get_pos())
+        button_rect = self.draw_button("Play Again", SCREEN_WIDTH // 2 - 125, 570, 250, 70, 
                                       GRAY if not hover else (220, 220, 220))
         self.button_rects = [button_rect]
     
     def draw_history_matrix(self):
         # Draw the history title
-        self.draw_text("Treatment History", self.font, BLACK, self.history_start_x + 100, self.history_start_y - 30, centered=True)
+        self.draw_text("Treatment History", self.font, BLACK, self.history_start_x + 180, self.history_start_y - 40, centered=True)
         
-        # Calculate how many cells per row (max 5)
-        cells_per_row = min(5, self.session.num_persons)
+        # Calculate how many cells per row (max 6)
+        cells_per_row = min(6, self.session.num_persons)
         if cells_per_row == 0:  # Avoid division by zero
             return
             
@@ -364,17 +485,17 @@ class GameUI:
             # Draw the result symbol (green V or red X)
             if result:  # Survived
                 # Draw a green V
-                pygame.draw.line(self.screen, GREEN, (x + 5, y + 15), (x + 15, y + 25), 3)
-                pygame.draw.line(self.screen, GREEN, (x + 15, y + 25), (x + 25, y + 5), 3)
+                pygame.draw.line(self.screen, GREEN, (x + 10, y + 30), (x + 25, y + 45), 5)
+                pygame.draw.line(self.screen, GREEN, (x + 25, y + 45), (x + 50, y + 15), 5)
             else:  # Died
                 # Draw a red X
-                pygame.draw.line(self.screen, RED, (x + 5, y + 5), (x + 25, y + 25), 3)
-                pygame.draw.line(self.screen, RED, (x + 5, y + 25), (x + 25, y + 5), 3)
+                pygame.draw.line(self.screen, RED, (x + 10, y + 10), (x + 50, y + 50), 5)
+                pygame.draw.line(self.screen, RED, (x + 10, y + 50), (x + 50, y + 10), 5)
             
             # Draw person number
-            small_font = pygame.font.SysFont(None, 14)
+            small_font = pygame.font.SysFont(None, 18)
             num_text = small_font.render(str(i + 1), True, BLACK)
-            self.screen.blit(num_text, (x + 2, y + 2))
+            self.screen.blit(num_text, (x + 3, y + 3))
         
         # Draw empty cells for future persons
         for i in range(len(self.session.history), self.session.num_persons):
@@ -389,9 +510,9 @@ class GameUI:
             pygame.draw.rect(self.screen, GRAY, cell_rect, 1)  # Just the border
             
             # Draw person number
-            small_font = pygame.font.SysFont(None, 14)
+            small_font = pygame.font.SysFont(None, 18)
             num_text = small_font.render(str(i + 1), True, BLACK)
-            self.screen.blit(num_text, (x + 2, y + 2))
+            self.screen.blit(num_text, (x + 3, y + 3))
     
     def handle_click(self, pos):
         for i, rect in enumerate(self.button_rects):
@@ -461,6 +582,9 @@ def create_medicines_from_config(config):
 
 # Main function
 def main():
+    # Set NumPy random seed for reproducibility
+    np.random.seed(42)
+    
     # Load configuration
     config = load_config()
     
