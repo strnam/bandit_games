@@ -3,6 +3,10 @@ import sys
 import os
 import yaml
 import numpy as np
+# Set matplotlib to use non-GUI backend to avoid Qt dependency issues
+import matplotlib
+matplotlib.use('Agg')  # Use the Agg backend (non-GUI)
+import matplotlib.pyplot as plt
 from enum import Enum
 
 # Initialize pygame
@@ -167,6 +171,9 @@ class GameSession:
         # Add history tracking for each person
         self.history = []  # Will contain True for survived, False for died
         
+        # Track accumulated survival numbers for graphing
+        self.accumulated_survival = []  # List of cumulative survival counts
+        
         # Initialize arm counts for greedy algorithm
         # For each medicine, track [successes, failures] for each person type
         self.arm_counts = {}
@@ -175,7 +182,7 @@ class GameSession:
                 self.arm_counts[(gender, age)] = [[0, 0] for _ in range(len(medicines))]
         
         # Run baseline simulation in the background
-        self.baseline_results = self.run_baseline_simulation()
+        self.baseline_results, self.baseline_accumulated_survival = self.run_baseline_simulation()
     
     def generate_persons(self):
         # Generate persons based on configured probabilities
@@ -247,14 +254,43 @@ class GameSession:
                 self.results["survived"] += 1
             else:
                 self.results["died"] += 1
+                
+            # Update accumulated survival count
+            self.accumulated_survival.append(self.results["survived"])
             
             self.current_person_index += 1
             
             if self.current_person_index >= len(self.persons):
                 self.game_over = True
+                # Generate survival comparison graph
+                self.generate_survival_graph()
             
             return survived
         return False
+        
+    def generate_survival_graph(self):
+        """Generate a graph comparing user and baseline accumulated survival"""
+        # Create x-axis (person numbers)
+        x = list(range(1, self.num_persons + 1))
+        
+        # Create the plot
+        plt.figure(figsize=(10, 6))
+        plt.plot(x, self.accumulated_survival, 'b-', label='Your Performance', linewidth=2)
+        plt.plot(x, self.baseline_accumulated_survival, 'r--', label='Baseline Algorithm', linewidth=2)
+        
+        # Add labels and title
+        plt.xlabel('Person Number')
+        plt.ylabel('Accumulated Survival Count')
+        plt.title('Your Performance vs. Baseline Algorithm')
+        plt.grid(True, linestyle='--', alpha=0.7)
+        plt.legend()
+        
+        # Save the figure
+        graph_path = os.path.join(os.path.dirname(__file__), 'survival_comparison.png')
+        plt.savefig(graph_path)
+        plt.close()
+        
+        return graph_path
         
     def get_greedy_recommendation(self, person, arm_counts):
         """Get medicine recommendation using the greedy algorithm for a specific person"""
@@ -276,6 +312,9 @@ class GameSession:
         for gender in Gender:
             for age in Age:
                 sim_arm_counts[(gender, age)] = [[0, 0] for _ in range(len(self.medicines))]
+        
+        # Track accumulated survival for baseline
+        accumulated_survival = []
         
         # Run simulation for each person
         for person in sim_persons:
@@ -299,8 +338,11 @@ class GameSession:
                 sim_results["survived"] += 1
             else:
                 sim_results["died"] += 1
+                
+            # Update accumulated survival
+            accumulated_survival.append(sim_results["survived"])
         
-        return sim_results
+        return sim_results, accumulated_survival
 
 # Game UI
 class GameUI:
@@ -315,6 +357,11 @@ class GameUI:
         self.history_margin = 15     # Margin between cells
         self.history_start_x = SCREEN_WIDTH - 450  # Position on the right side
         self.history_start_y = 400   # Position below the person image
+        
+        # Scrolling settings
+        self.scroll_y = 0  # Current scroll position
+        self.scroll_speed = 20  # Pixels per scroll event
+        self.max_scroll = 0  # Will be calculated based on content height
     
     def draw_text(self, text, font, color, x, y, centered=False):
         text_surface = font.render(text, True, color)
@@ -408,31 +455,40 @@ class GameUI:
         self.button_rects = [button_rect]
     
     def draw_game_over_screen(self):
+        # Create a scrollable surface that can be larger than the screen
+        # First, determine the total height needed
+        total_height = 1500  # Start with a large value to accommodate all content
+        
+        # Create a surface for the scrollable content
+        scroll_surface = pygame.Surface((SCREEN_WIDTH, total_height))
+        scroll_surface.fill(WHITE)
+        
+        # Draw all content on the scroll surface with adjusted positions
         # Draw title
-        self.draw_text("Game Over", self.title_font, BLACK, SCREEN_WIDTH // 2, 150, centered=True)
+        self.draw_text_on_surface(scroll_surface, "Game Over", self.title_font, BLACK, SCREEN_WIDTH // 2, 150, centered=True)
         
         # Draw user results
-        self.draw_text("Your Results:", self.font, BLACK, SCREEN_WIDTH // 2, 220, centered=True)
-        self.draw_text(f"Survived: {self.session.results['survived']}", self.font, GREEN, 
+        self.draw_text_on_surface(scroll_surface, "Your Results:", self.font, BLACK, SCREEN_WIDTH // 2, 220, centered=True)
+        self.draw_text_on_surface(scroll_surface, f"Survived: {self.session.results['survived']}", self.font, GREEN, 
                       SCREEN_WIDTH // 2, 250, centered=True)
-        self.draw_text(f"Died: {self.session.results['died']}", self.font, RED, 
+        self.draw_text_on_surface(scroll_surface, f"Died: {self.session.results['died']}", self.font, RED, 
                       SCREEN_WIDTH // 2, 280, centered=True)
         
         # Draw user survival rate
         user_survival_rate = (self.session.results['survived'] / self.session.num_persons) * 100
-        self.draw_text(f"Your Survival Rate: {user_survival_rate:.1f}%", self.font, BLUE, 
+        self.draw_text_on_surface(scroll_surface, f"Your Survival Rate: {user_survival_rate:.1f}%", self.font, BLUE, 
                       SCREEN_WIDTH // 2, 310, centered=True)
         
         # Draw baseline results
-        self.draw_text("Greedy Algorithm Baseline:", self.font, BLACK, SCREEN_WIDTH // 2, 360, centered=True)
-        self.draw_text(f"Survived: {self.session.baseline_results['survived']}", self.font, GREEN, 
+        self.draw_text_on_surface(scroll_surface, "Greedy Algorithm Baseline:", self.font, BLACK, SCREEN_WIDTH // 2, 360, centered=True)
+        self.draw_text_on_surface(scroll_surface, f"Survived: {self.session.baseline_results['survived']}", self.font, GREEN, 
                       SCREEN_WIDTH // 2, 390, centered=True)
-        self.draw_text(f"Died: {self.session.baseline_results['died']}", self.font, RED, 
+        self.draw_text_on_surface(scroll_surface, f"Died: {self.session.baseline_results['died']}", self.font, RED, 
                       SCREEN_WIDTH // 2, 420, centered=True)
         
         # Draw baseline survival rate
         baseline_survival_rate = (self.session.baseline_results['survived'] / self.session.num_persons) * 100
-        self.draw_text(f"Baseline Survival Rate: {baseline_survival_rate:.1f}%", self.font, BLUE, 
+        self.draw_text_on_surface(scroll_surface, f"Baseline Survival Rate: {baseline_survival_rate:.1f}%", self.font, BLUE, 
                       SCREEN_WIDTH // 2, 450, centered=True)
         
         # Draw comparison
@@ -449,13 +505,72 @@ class GameUI:
             comparison_text = f"Baseline outperformed you by {abs(diff):.1f}%"
             comparison_color = RED
             
-        self.draw_text(comparison_text, self.font, comparison_color, SCREEN_WIDTH // 2, 500, centered=True)
+        self.draw_text_on_surface(scroll_surface, comparison_text, self.font, comparison_color, SCREEN_WIDTH // 2, 500, centered=True)
         
-        # Draw restart button
-        hover = pygame.Rect(SCREEN_WIDTH // 2 - 125, 570, 250, 70).collidepoint(pygame.mouse.get_pos())
-        button_rect = self.draw_button("Play Again", SCREEN_WIDTH // 2 - 125, 570, 250, 70, 
-                                      GRAY if not hover else (220, 220, 220))
-        self.button_rects = [button_rect]
+        # Load and display the survival comparison graph
+        graph_path = os.path.join(os.path.dirname(__file__), 'survival_comparison.png')
+        graph_y = 550
+        if os.path.exists(graph_path):
+            try:
+                graph_image = pygame.image.load(graph_path)
+                # Scale the graph to fit the screen width
+                graph_width = min(SCREEN_WIDTH - 100, 800)
+                graph_height = int(graph_width * 0.6)  # Maintain aspect ratio
+                graph_image = pygame.transform.scale(graph_image, (graph_width, graph_height))
+                
+                # Position the graph below the text
+                graph_rect = graph_image.get_rect(center=(SCREEN_WIDTH // 2, graph_y + graph_height // 2))
+                scroll_surface.blit(graph_image, graph_rect)
+                
+                # Move the restart button below the graph
+                button_y = graph_rect.bottom + 30
+            except pygame.error:
+                # If there's an error loading the graph, position the button at the default position
+                button_y = graph_y + 300
+        else:
+            button_y = graph_y + 300
+        
+        # Calculate the maximum scroll value based on content height
+        self.max_scroll = max(0, button_y + 100 - SCREEN_HEIGHT)
+        
+        # Draw restart button on the scroll surface
+        hover = pygame.Rect(SCREEN_WIDTH // 2 - 125, button_y, 250, 70).collidepoint(
+            pygame.mouse.get_pos()[0], pygame.mouse.get_pos()[1] + self.scroll_y)
+        button_rect = pygame.Rect(SCREEN_WIDTH // 2 - 125, button_y, 250, 70)
+        pygame.draw.rect(scroll_surface, GRAY if not hover else (220, 220, 220), button_rect, border_radius=5)
+        pygame.draw.rect(scroll_surface, BLACK, button_rect, 2, border_radius=5)
+        
+        # Center the text on the button
+        button_text = self.font.render("Play Again", True, BLACK)
+        button_text_rect = button_text.get_rect(center=button_rect.center)
+        scroll_surface.blit(button_text, button_text_rect)
+        
+        # Store the button rect for click detection, adjusted for scroll position
+        self.button_rects = [pygame.Rect(button_rect.x, button_rect.y - self.scroll_y, button_rect.width, button_rect.height)]
+        
+        # Draw scroll instructions
+        self.draw_text_on_surface(scroll_surface, "Use mouse wheel to scroll", self.font, BLUE, 
+                               SCREEN_WIDTH // 2, button_y + 100, centered=True)
+        
+        # Draw scrollbar
+        if self.max_scroll > 0:
+            scrollbar_height = min(SCREEN_HEIGHT * SCREEN_HEIGHT / total_height, SCREEN_HEIGHT)
+            scrollbar_pos = (self.scroll_y / self.max_scroll) * (SCREEN_HEIGHT - scrollbar_height)
+            scrollbar_rect = pygame.Rect(SCREEN_WIDTH - 20, scrollbar_pos, 10, scrollbar_height)
+            pygame.draw.rect(scroll_surface, (150, 150, 150), scrollbar_rect, border_radius=5)
+        
+        # Blit the visible portion of the scroll surface to the screen
+        self.screen.blit(scroll_surface, (0, 0), (0, self.scroll_y, SCREEN_WIDTH, SCREEN_HEIGHT))
+        
+    def draw_text_on_surface(self, surface, text, font, color, x, y, centered=False):
+        """Draw text on a specific surface"""
+        text_surface = font.render(text, True, color)
+        if centered:
+            text_rect = text_surface.get_rect(center=(x, y))
+        else:
+            text_rect = text_surface.get_rect(topleft=(x, y))
+        surface.blit(text_surface, text_rect)
+        return text_rect
     
     def draw_history_matrix(self):
         # Draw the history title
@@ -582,8 +697,8 @@ def create_medicines_from_config(config):
 
 # Main function
 def main():
-    # Set NumPy random seed for reproducibility
-    np.random.seed(42)
+    # Set NumPy random seed based on current time for different outcomes each run
+    np.random.seed(int(pygame.time.get_ticks()) % 10000000)
     
     # Load configuration
     config = load_config()
@@ -592,6 +707,9 @@ def main():
     screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
     pygame.display.set_caption("Bandit Game")
     clock = pygame.time.Clock()
+    
+    # Enable mouse wheel events
+    pygame.event.set_allowed([pygame.QUIT, pygame.MOUSEBUTTONDOWN, pygame.MOUSEBUTTONUP, pygame.MOUSEWHEEL])
     
     # Create medicines from config
     medicines = create_medicines_from_config(config)
@@ -628,6 +746,13 @@ def main():
                     })
                     session = GameSession(num_persons, medicines, person_probabilities)
                     ui.session = session
+                    # Reset scroll position
+                    ui.scroll_y = 0
+            elif event.type == pygame.MOUSEWHEEL:
+                # Handle scrolling in game over screen
+                if session.game_over:
+                    # Scroll up or down based on wheel direction
+                    ui.scroll_y = max(0, min(ui.max_scroll, ui.scroll_y - event.y * ui.scroll_speed))
         
         # Draw the game screen
         ui.draw_game_screen(mouse_pos)
