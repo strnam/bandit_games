@@ -1,6 +1,7 @@
 import pygame
 import sys
 import random
+import os
 from enum import Enum
 
 # Initialize pygame
@@ -32,6 +33,72 @@ class Person:
     def __init__(self, gender=Gender.MALE, age=Age.YOUNG):
         self.gender = gender
         self.age = age
+        self.image = None
+        self.load_image()
+    
+    def load_image(self):
+        # Define image path based on gender and age
+        image_filename = f"{self.gender.value.lower()}_{self.age.value.lower()}_v2.png"
+        image_path = os.path.join("images", image_filename)
+        
+        # Try to load the image if it exists, otherwise use a placeholder
+        try:
+            if os.path.exists(image_path):
+                self.image = pygame.image.load(image_path)
+                # Scale the image to a reasonable size
+                self.image = pygame.transform.scale(self.image, (150, 150))
+            else:
+                # Create a placeholder image with text
+                self.image = self.create_placeholder_image()
+        except pygame.error:
+            self.image = self.create_placeholder_image()
+    
+    def create_placeholder_image(self):
+        # Create a surface for the placeholder
+        surface = pygame.Surface((150, 150))
+        
+        # Choose background color based on gender
+        if self.gender == Gender.MALE:
+            bg_color = (180, 200, 255)  # Light blue for male
+        else:
+            bg_color = (255, 180, 200)  # Light pink for female
+        
+        surface.fill(bg_color)
+        
+        # Draw a simple person silhouette
+        # Head
+        head_color = (80, 80, 80)
+        pygame.draw.circle(surface, head_color, (75, 50), 25)
+        
+        # Body
+        body_color = (100, 100, 100)
+        pygame.draw.rect(surface, body_color, (60, 75, 30, 50))
+        
+        # Add age-specific details
+        if self.age == Age.OLD:
+            # Draw gray hair or wrinkles for old
+            pygame.draw.line(surface, (200, 200, 200), (55, 40), (70, 35), 3)
+            pygame.draw.line(surface, (200, 200, 200), (80, 35), (95, 40), 3)
+            # Walking stick
+            pygame.draw.line(surface, (139, 69, 19), (45, 75), (55, 125), 3)
+        else:
+            # Younger appearance
+            # Maybe a hat or different hairstyle
+            pygame.draw.rect(surface, (50, 50, 50), (60, 25, 30, 10))
+        
+        # Add text labels
+        font = pygame.font.SysFont(None, 20)
+        gender_text = font.render(self.gender.value, True, (0, 0, 0))
+        age_text = font.render(self.age.value, True, (0, 0, 0))
+        
+        # Position the text
+        surface.blit(gender_text, (75 - gender_text.get_width() // 2, 130))
+        surface.blit(age_text, (75 - age_text.get_width() // 2, 110))
+        
+        # Add a border
+        pygame.draw.rect(surface, (0, 0, 0), surface.get_rect(), 2)
+        
+        return surface
     
     def __str__(self):
         return f"{self.gender.value}, {self.age.value}"
@@ -154,6 +221,11 @@ class GameUI:
         self.draw_text(f"Gender: {person.gender.value}", self.font, BLACK, 50, 150)
         self.draw_text(f"Age: {person.age.value}", self.font, BLACK, 50, 180)
         
+        # Draw person image
+        if person.image:
+            image_rect = person.image.get_rect(center=(SCREEN_WIDTH - 150, 150))
+            self.screen.blit(person.image, image_rect)
+        
         # Draw instructions
         self.draw_text("Select a medicine to administer:", self.font, BLACK, 50, 230)
         
@@ -173,6 +245,11 @@ class GameUI:
                       self.font, BLACK, 50, 120)
         self.draw_text(f"Gender: {person.gender.value}", self.font, BLACK, 50, 150)
         self.draw_text(f"Age: {person.age.value}", self.font, BLACK, 50, 180)
+        
+        # Draw person image
+        if person.image:
+            image_rect = person.image.get_rect(center=(SCREEN_WIDTH - 150, 150))
+            self.screen.blit(person.image, image_rect)
         
         # Draw medicine info
         self.draw_text(f"Medicine: {self.session.selected_medicine.name}", self.font, BLACK, 50, 230)
