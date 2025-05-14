@@ -2,6 +2,7 @@ import pygame
 import sys
 import random
 import os
+import yaml
 from enum import Enum
 
 # Initialize pygame
@@ -123,22 +124,59 @@ class Medicine:
 
 # Game Session
 class GameSession:
-    def __init__(self, num_persons, medicines):
+    def __init__(self, num_persons, medicines, person_probabilities=None):
         self.num_persons = num_persons
         self.medicines = medicines
         self.persons = []
         self.results = {"survived": 0, "died": 0}
         self.current_person_index = 0
+        self.person_probabilities = person_probabilities or {
+            "male_young": 0.25, "male_old": 0.25, 
+            "female_young": 0.25, "female_old": 0.25
+        }
         self.generate_persons()
         self.game_over = False
         self.selected_medicine = None
         self.current_result = None
+        # Add history tracking for each person
+        self.history = []  # Will contain True for survived, False for died
     
     def generate_persons(self):
-        # Generate random persons
+        # Generate persons based on configured probabilities
         for _ in range(self.num_persons):
-            gender = random.choice(list(Gender))
-            age = random.choice(list(Age))
+            # Create weighted choices based on probabilities
+            choices = []
+            weights = []
+            
+            # Add each person type with its weight
+            if self.person_probabilities["male_young"] > 0:
+                choices.append((Gender.MALE, Age.YOUNG))
+                weights.append(self.person_probabilities["male_young"])
+            
+            if self.person_probabilities["male_old"] > 0:
+                choices.append((Gender.MALE, Age.OLD))
+                weights.append(self.person_probabilities["male_old"])
+            
+            if self.person_probabilities["female_young"] > 0:
+                choices.append((Gender.FEMALE, Age.YOUNG))
+                weights.append(self.person_probabilities["female_young"])
+            
+            if self.person_probabilities["female_old"] > 0:
+                choices.append((Gender.FEMALE, Age.OLD))
+                weights.append(self.person_probabilities["female_old"])
+            
+            # If no valid probabilities, use default equal distribution
+            if not choices:
+                choices = [
+                    (Gender.MALE, Age.YOUNG),
+                    (Gender.MALE, Age.OLD),
+                    (Gender.FEMALE, Age.YOUNG),
+                    (Gender.FEMALE, Age.OLD)
+                ]
+                weights = [0.25, 0.25, 0.25, 0.25]
+            
+            # Choose a person type based on weights
+            gender, age = random.choices(choices, weights=weights, k=1)[0]
             self.persons.append(Person(gender, age))
     
     def get_current_person(self):
@@ -153,6 +191,9 @@ class GameSession:
             self.selected_medicine = medicine
             survived = medicine.apply(person)
             self.current_result = "Survived" if survived else "Died"
+            
+            # Add to history
+            self.history.append(survived)
             
             if survived:
                 self.results["survived"] += 1
@@ -175,6 +216,11 @@ class GameUI:
         self.font = pygame.font.SysFont(None, FONT_SIZE)
         self.title_font = pygame.font.SysFont(None, FONT_SIZE * 2)
         self.button_rects = []
+        # History matrix settings
+        self.history_cell_size = 30
+        self.history_margin = 20
+        self.history_start_x = SCREEN_WIDTH - 200  # Position on the right side
+        self.history_start_y = 400  # Position below the person image
     
     def draw_text(self, text, font, color, x, y, centered=False):
         text_surface = font.render(text, True, color)
@@ -211,6 +257,9 @@ class GameUI:
             self.draw_result_screen()
         else:
             self.draw_medicine_selection_screen(mouse_pos)
+            
+        # Always draw the history matrix
+        self.draw_history_matrix()
     
     def draw_medicine_selection_screen(self, mouse_pos):
         person = self.session.get_current_person()
@@ -234,7 +283,7 @@ class GameUI:
             y_pos = 280 + i * 60
             hover = pygame.Rect(200, y_pos, 400, 50).collidepoint(mouse_pos)
             button_rect = self.draw_button(f"{medicine.name}", 200, y_pos, 400, 50, 
-                                         GRAY if not hover else (220, 220, 220))
+                                          GRAY if not hover else (220, 220, 220))
             self.button_rects.append(button_rect)
     
     def draw_result_screen(self):
@@ -261,7 +310,7 @@ class GameUI:
         # Draw continue button
         hover = pygame.Rect(300, 350, 200, 50).collidepoint(pygame.mouse.get_pos())
         button_rect = self.draw_button("Continue", 300, 350, 200, 50, 
-                                     GRAY if not hover else (220, 220, 220))
+                                      GRAY if not hover else (220, 220, 220))
         self.button_rects = [button_rect]
     
     def draw_game_over_screen(self):
@@ -284,8 +333,65 @@ class GameUI:
         # Draw restart button
         hover = pygame.Rect(300, 400, 200, 50).collidepoint(pygame.mouse.get_pos())
         button_rect = self.draw_button("Play Again", 300, 400, 200, 50, 
-                                     GRAY if not hover else (220, 220, 220))
+                                      GRAY if not hover else (220, 220, 220))
         self.button_rects = [button_rect]
+    
+    def draw_history_matrix(self):
+        # Draw the history title
+        self.draw_text("Treatment History", self.font, BLACK, self.history_start_x + 100, self.history_start_y - 30, centered=True)
+        
+        # Calculate how many cells per row (max 5)
+        cells_per_row = min(5, self.session.num_persons)
+        if cells_per_row == 0:  # Avoid division by zero
+            return
+            
+        # Calculate total rows needed
+        total_rows = (self.session.num_persons + cells_per_row - 1) // cells_per_row
+        
+        # Draw the matrix of results
+        for i, result in enumerate(self.session.history):
+            row = i // cells_per_row
+            col = i % cells_per_row
+            
+            x = self.history_start_x + col * (self.history_cell_size + self.history_margin)
+            y = self.history_start_y + row * (self.history_cell_size + self.history_margin)
+            
+            # Draw cell background
+            cell_rect = pygame.Rect(x, y, self.history_cell_size, self.history_cell_size)
+            pygame.draw.rect(self.screen, GRAY, cell_rect)
+            pygame.draw.rect(self.screen, BLACK, cell_rect, 1)  # Border
+            
+            # Draw the result symbol (green V or red X)
+            if result:  # Survived
+                # Draw a green V
+                pygame.draw.line(self.screen, GREEN, (x + 5, y + 15), (x + 15, y + 25), 3)
+                pygame.draw.line(self.screen, GREEN, (x + 15, y + 25), (x + 25, y + 5), 3)
+            else:  # Died
+                # Draw a red X
+                pygame.draw.line(self.screen, RED, (x + 5, y + 5), (x + 25, y + 25), 3)
+                pygame.draw.line(self.screen, RED, (x + 5, y + 25), (x + 25, y + 5), 3)
+            
+            # Draw person number
+            small_font = pygame.font.SysFont(None, 14)
+            num_text = small_font.render(str(i + 1), True, BLACK)
+            self.screen.blit(num_text, (x + 2, y + 2))
+        
+        # Draw empty cells for future persons
+        for i in range(len(self.session.history), self.session.num_persons):
+            row = i // cells_per_row
+            col = i % cells_per_row
+            
+            x = self.history_start_x + col * (self.history_cell_size + self.history_margin)
+            y = self.history_start_y + row * (self.history_cell_size + self.history_margin)
+            
+            # Draw empty cell
+            cell_rect = pygame.Rect(x, y, self.history_cell_size, self.history_cell_size)
+            pygame.draw.rect(self.screen, GRAY, cell_rect, 1)  # Just the border
+            
+            # Draw person number
+            small_font = pygame.font.SysFont(None, 14)
+            num_text = small_font.render(str(i + 1), True, BLACK)
+            self.screen.blit(num_text, (x + 2, y + 2))
     
     def handle_click(self, pos):
         for i, rect in enumerate(self.button_rects):
@@ -296,41 +402,87 @@ class GameUI:
                     self.session.current_result = None
                     return "continue"
                 else:
+                    # Apply medicine but wait for continue button
                     self.session.apply_medicine(i)
                     return "medicine_applied"
         return None
 
+# Load configuration from YAML file
+def load_config():
+    config_path = os.path.join(os.path.dirname(__file__), 'config.yaml')
+    try:
+        with open(config_path, 'r') as file:
+            return yaml.safe_load(file)
+    except Exception as e:
+        print(f"Error loading config file: {e}")
+        # Return default configuration if file can't be loaded
+        return {
+            'game': {'num_persons': 10},
+            'medicines': [
+                {
+                    'name': 'Medicine A',
+                    'effective_rates': {
+                        'male_young': 0.8, 'male_old': 0.6,
+                        'female_young': 0.7, 'female_old': 0.5
+                    }
+                },
+                {
+                    'name': 'Medicine B',
+                    'effective_rates': {
+                        'male_young': 0.6, 'male_old': 0.7,
+                        'female_young': 0.8, 'female_old': 0.5
+                    }
+                },
+                {
+                    'name': 'Medicine C',
+                    'effective_rates': {
+                        'male_young': 0.5, 'male_old': 0.5,
+                        'female_young': 0.6, 'female_old': 0.8
+                    }
+                }
+            ]
+        }
+
+# Convert YAML config to game objects
+def create_medicines_from_config(config):
+    medicines = []
+    for med_config in config['medicines']:
+        # Convert string keys to enum tuple keys
+        effective_rates = {}
+        for key, value in med_config['effective_rates'].items():
+            # Parse the key (e.g., 'male_young' -> (Gender.MALE, Age.YOUNG))
+            parts = key.split('_')
+            gender = Gender.MALE if parts[0] == 'male' else Gender.FEMALE
+            age = Age.YOUNG if parts[1] == 'young' else Age.OLD
+            effective_rates[(gender, age)] = value
+        
+        medicines.append(Medicine(med_config['name'], effective_rates))
+    return medicines
+
 # Main function
 def main():
+    # Load configuration
+    config = load_config()
+    
     # Set up the display
     screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
     pygame.display.set_caption("Bandit Game")
     clock = pygame.time.Clock()
     
-    # Define medicines with their effective rates
-    medicines = [
-        Medicine("Medicine A", {
-            (Gender.MALE, Age.YOUNG): 0.8,    # effective_rate_1
-            (Gender.MALE, Age.OLD): 0.6,      # effective_rate_2
-            (Gender.FEMALE, Age.YOUNG): 0.7,  # effective_rate_3
-            (Gender.FEMALE, Age.OLD): 0.5     # effective_rate_4
-        }),
-        Medicine("Medicine B", {
-            (Gender.MALE, Age.YOUNG): 0.6,
-            (Gender.MALE, Age.OLD): 0.7,
-            (Gender.FEMALE, Age.YOUNG): 0.8,
-            (Gender.FEMALE, Age.OLD): 0.5
-        }),
-        Medicine("Medicine C", {
-            (Gender.MALE, Age.YOUNG): 0.5,
-            (Gender.MALE, Age.OLD): 0.5,
-            (Gender.FEMALE, Age.YOUNG): 0.6,
-            (Gender.FEMALE, Age.OLD): 0.8
-        })
-    ]
+    # Create medicines from config
+    medicines = create_medicines_from_config(config)
+    
+    # Get number of persons from config
+    num_persons = config['game']['num_persons']
+    
+    # Get person probabilities from config
+    person_probabilities = config.get('person_probabilities', {
+        "male_young": 0.25, "male_old": 0.25, 
+        "female_young": 0.25, "female_old": 0.25
+    })
     
     # Create game session
-    session = GameSession(10, medicines)  # 10 persons
+    session = GameSession(num_persons, medicines, person_probabilities)
     ui = GameUI(screen, session)
     
     # Main game loop
@@ -344,8 +496,13 @@ def main():
             elif event.type == pygame.MOUSEBUTTONDOWN:
                 action = ui.handle_click(event.pos)
                 if action == "restart":
-                    # Create a new game session
-                    session = GameSession(10, medicines)
+                    # Create a new game session with config values
+                    num_persons = config['game']['num_persons']
+                    person_probabilities = config.get('person_probabilities', {
+                        "male_young": 0.25, "male_old": 0.25, 
+                        "female_young": 0.25, "female_old": 0.25
+                    })
+                    session = GameSession(num_persons, medicines, person_probabilities)
                     ui.session = session
         
         # Draw the game screen

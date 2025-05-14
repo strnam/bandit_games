@@ -1,0 +1,42 @@
+# Bandit Game Configuration
+
+# Game settings
+game:
+  num_persons: 10  # Number of persons in a game session
+
+# Person type probabilities
+person_probabilities:
+  male_young: 1.0  # Probability of Male, Young appearing
+  male_old: 0.0    # Probability of Male, Old appearing
+  female_young: 0.0  # Probability of Female, Young appearing
+  female_old: 0.0    # Probability of Female, Old appearing
+  
+# Medicines configuration
+medicines:
+  - name: "Medicine A"
+    effective_rates:
+      male_young: 0.8
+      male_old: 0.6
+      female_young: 0.7
+      female_old: 0.5
+      
+  - name: "Medicine B"
+    effective_rates:
+      male_young: 0.6
+      male_old: 0.7
+      female_young: 0.8
+      female_old: 0.5
+      
+  - name: "Medicine C"
+    effective_rates:
+      male_young: 0.5
+      male_old: 0.5
+      female_young: 0.6
+      female_old: 0.8
+      
+  - name: "Medicine D"
+    effective_rates:
+      male_young: 0.7
+      male_old: 0.4
+      female_young: 0.5
+      female_old: 0.6
