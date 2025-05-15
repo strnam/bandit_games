@@ -16,7 +16,7 @@ person_probabilities:
 medicines:
   - name: "Medicine A"
     effective_rates:
-      male_young: 0.4
+      male_young: 0.45
       male_old: 0.6
       female_young: 0.7
       female_old: 0.5
@@ -30,14 +30,14 @@ medicines:
       
   - name: "Medicine C"
     effective_rates:
-      male_young: 0.2
+      male_young: 0.4
       male_old: 0.5
       female_young: 0.6
       female_old: 0.8
       
   - name: "Medicine D"
     effective_rates:
-      male_young: 0.7
+      male_young: 0.65
       male_old: 0.4
       female_young: 0.5
       female_old: 0.6
