@@ -581,11 +581,16 @@ class GameUI:
         result_color = GREEN if self.session.current_result == "Survived" else RED
         self.draw_text(f"Result: {self.session.current_result}", self.font, result_color, 80, 320)
         
-        # Draw continue button
-        hover = pygame.Rect(350, 400, 250, 70).collidepoint(pygame.mouse.get_pos())
-        button_rect = self.draw_button("Continue", 350, 400, 250, 70, 
-                                      GRAY if not hover else (220, 220, 220))
-        self.button_rects = [button_rect]
+        # Only draw continue button if ask_continue is True
+        self.button_rects = []
+        if self.session.ask_continue:
+            hover = pygame.Rect(350, 400, 250, 70).collidepoint(pygame.mouse.get_pos())
+            button_rect = self.draw_button("Continue", 350, 400, 250, 70, 
+                                          GRAY if not hover else (220, 220, 220))
+            self.button_rects = [button_rect]
+        else:
+            # Display a message that the game will continue automatically
+            self.draw_text("Continuing automatically...", self.font, BLUE, SCREEN_WIDTH // 2, 400, centered=True)
     
     def draw_game_over_screen(self):
         # Create a scrollable surface that can be larger than the screen
